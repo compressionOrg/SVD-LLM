@@ -2,7 +2,7 @@ import os
 import random
 import torch
 import sys
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from torch.utils.data.dataset import Dataset
 
 current_path = os.path.dirname(os.path.abspath(__file__))
@@ -22,13 +22,16 @@ def get_calib_train_data(name, tokenizer, nsamples, seqlen=2048, seed=3, batch_s
         traindataset = torch.load(cache_file)
         return traindataset
     if name == "c4":
-        traindata = load_dataset("json", data_files="utils/c4-train.json")['train']
+        # traindata = load_dataset("json", data_files="utils/c4-train.json")['train']
+        traindata = load_from_disk("datasets/c4/train")
         tot_text = "\n\n".join(traindata["text"])
     elif name == "ptb":
-        traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train', cache_dir=dataset_cache_dir)
+        # traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train', cache_dir=dataset_cache_dir)
+        traindata = load_from_disk("datasets/ptb/train")
         tot_text = "\n\n".join(traindata["sentence"])
     elif name == "wikitext2":
-        traindata = load_dataset("wikitext", "wikitext-2-raw-v1", split="train", cache_dir=dataset_cache_dir)
+        # traindata = load_dataset("wikitext", "wikitext-2-raw-v1", split="train", cache_dir=dataset_cache_dir)
+        traindata = load_from_disk("datasets/wikitext/train")
         tot_text = "\n\n".join(traindata["text"])
     else:
         raise NotImplementedError
@@ -53,9 +56,11 @@ def get_calib_train_data(name, tokenizer, nsamples, seqlen=2048, seed=3, batch_s
 
 
 def get_wikitext2(nsamples, seed, seqlen, tokenizer, dataset_cache_dir=None):
-    traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train', cache_dir=dataset_cache_dir)
-    testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test', cache_dir=dataset_cache_dir)
-
+    # traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train', cache_dir=dataset_cache_dir)
+    # testdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test', cache_dir=dataset_cache_dir)
+    traindata = load_from_disk("datasets/wikitext/train")
+    testdata = load_from_disk("datasets/wikitext/test")
+    
     trainenc = tokenizer("\n\n".join(traindata['text']), return_tensors='pt')
     testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')
 
@@ -72,9 +77,11 @@ def get_wikitext2(nsamples, seed, seqlen, tokenizer, dataset_cache_dir=None):
     return trainloader, testenc
 
 def get_ptb(nsamples, seed, seqlen, tokenizer, dataset_cache_dir=None):
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train', cache_dir=dataset_cache_dir)
-    valdata = load_dataset('ptb_text_only', 'penn_treebank', split='validation', cache_dir=dataset_cache_dir)
-
+    # traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train', cache_dir=dataset_cache_dir)
+    # valdata = load_dataset('ptb_text_only', 'penn_treebank', split='validation', cache_dir=dataset_cache_dir)
+    traindata = load_from_disk("datasets/ptb/train")
+    valdata = load_from_disk("datasets/ptb/test")
+    
     trainenc = tokenizer("\n\n".join(traindata['sentence']), return_tensors='pt')
     testenc = tokenizer("\n\n".join(valdata['sentence']), return_tensors='pt')
 
@@ -91,9 +98,11 @@ def get_ptb(nsamples, seed, seqlen, tokenizer, dataset_cache_dir=None):
     return trainloader, testenc
 
 def get_c4(nsamples, seed, seqlen, tokenizer):
-    traindata = load_dataset("json", data_files="utils/c4-train.json")['train']
-    valdata = load_dataset("json", data_files="utils/c4-validation.json")['train']
-
+    # traindata = load_dataset("json", data_files="utils/c4-train.json")['train']
+    # valdata = load_dataset("json", data_files="utils/c4-validation.json")['train']
+    traindata = load_from_disk("datasets/c4/train")
+    valdata = load_from_disk("datasets/c4/validation")
+    
     import random
     random.seed(seed)
     trainloader = []
@@ -134,8 +143,10 @@ def get_c4(nsamples, seed, seqlen, tokenizer):
 
 def get_ptb_new(nsamples, seed, seqlen, tokenizer, dataset_cache_dir=None):
     from datasets import load_dataset
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train', cache_dir=dataset_cache_dir)
-    testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test', cache_dir=dataset_cache_dir)
+    # traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train', cache_dir=dataset_cache_dir)
+    # testdata = load_dataset('ptb_text_only', 'penn_treebank', split='test', cache_dir=dataset_cache_dir)
+    traindata = load_from_disk("datasets/ptb/train")
+    testdata = load_from_disk("datasets/ptb/test")
 
     trainenc = tokenizer(" ".join(traindata['sentence']), return_tensors='pt')
     testenc = tokenizer(" ".join(testdata['sentence']), return_tensors='pt')
@@ -153,9 +164,11 @@ def get_ptb_new(nsamples, seed, seqlen, tokenizer, dataset_cache_dir=None):
     return trainloader, testenc
 
 def get_c4_new(nsamples, seed, seqlen, tokenizer):
-    traindata = load_dataset("json", data_files="utils/c4-train.json")['train']
-    valdata = load_dataset("json", data_files="utils/c4-validation.json")['train']
-
+    # traindata = load_dataset("json", data_files="utils/c4-train.json")['train']
+    # valdata = load_dataset("json", data_files="utils/c4-validation.json")['train']
+    traindata = load_from_disk("datasets/c4/train")
+    valdata = load_from_disk("datasets/c4/validation")
+    
     import random
     random.seed(seed)
     trainloader = []
@@ -218,13 +231,16 @@ def get_test_data(name, tokenizer, seq_len=2048, batch_size = 4):
         return IndexDataset(tensors=test_ids_batch)
     ####
     if 'wikitext2' in name:
-        test_data = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+        # test_data = load_dataset('wikitext', 'wikitext-2-raw-v1', split='test')
+        test_data = load_from_disk("datasets/wikitext/test")
         test_dataset = process_data(test_data, tokenizer, seq_len, 'text')
     if 'ptb' in name:
-        test_data = load_dataset('ptb_text_only', 'penn_treebank', split='test')
+        # test_data = load_dataset('ptb_text_only', 'penn_treebank', split='test')
+        test_data = load_from_disk("datasets/ptb/test")
         test_dataset = process_data(test_data, tokenizer, seq_len, 'sentence')
     elif 'c4' in name:
-        test_data = load_dataset("json", data_files="utils/c4-validation.json")['train']
+        # test_data = load_dataset("json", data_files="utils/c4-validation.json")['train']
+        test_data = load_from_disk("datasets/c4/validation")
         test_dataset = process_data(test_data[0:2000], tokenizer, seq_len, 'text')
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     return test_loader
