@@ -11,13 +11,16 @@ sys.path.append(current_path)
 # bandaid fix
 dev = torch.device("cuda")
 
-def get_model_from_huggingface(model_id):
+def get_model_from_huggingface(model_id, cache_dir="llm_weights"):
     from transformers import AutoModelForCausalLM, LlamaTokenizer, AutoTokenizer, LlamaForCausalLM
+    # Offline load moodel
+    model_id = cache_dir + "/models--" + model_id.replace("/", "--") + "/model"
+
     if "opt" in model_id or "mistral" in model_id:
-        tokenizer = AutoTokenizer.from_pretrained(model_id, device_map="cpu", trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, device_map="cpu", trust_remote_code=True, cache_dir=cache_dir)
     else:
         tokenizer = LlamaTokenizer.from_pretrained(model_id, device_map="cpu", trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(model_id, device_map="cpu", torch_dtype=torch.float16, trust_remote_code=True, cache_dir=None)
+    model = AutoModelForCausalLM.from_pretrained(model_id, device_map="cpu", torch_dtype=torch.float16, trust_remote_code=True, cache_dir=cache_dir)
     model.seqlen = 2048
     return model, tokenizer
 

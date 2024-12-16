@@ -518,11 +518,12 @@ if __name__ == '__main__':
     parser.add_argument('--gen_seq_len', type=int, default=1024, help='generated sequence len for efficiency evaluation')
     parser.add_argument('--step', type=int, default=4, help='the step to run the compression')
     parser.add_argument('--lora', type=str, default=None, help='the lora updated weight path to run the accuracy evaluation')
+    parser.add_argument('--cache_dir', type=str, default="llm_weights", help='the path to load model')
     
     args = parser.parse_args()
     args.ratio = 1- args.ratio
     if args.step == 1:
-        model, tokenizer = get_model_from_huggingface(model_id=args.model)
+        model, tokenizer = get_model_from_huggingface(model_id=args.model, cache_dir=args.cache_dir)
         model = model.eval()
         if args.profiling_mat_path is None:
             cali_white_data = get_calib_train_data(args.dataset, tokenizer, args.whitening_nsamples, seqlen=args.model_seq_len)
@@ -535,7 +536,7 @@ if __name__ == '__main__':
         if args.save_path is not None:
             torch.save({'model': model, 'tokenizer': tokenizer}, args.save_path + "/" + args.model.replace("/", "_").replace("-", "_") +'_whitening_only_' + str(args.ratio) + '.pt')   # fp32
     elif args.step == 2:
-        model, tokenizer = get_model_from_huggingface(model_id=args.model)
+        model, tokenizer = get_model_from_huggingface(model_id=args.model, cache_dir=args.cache_dir)
         dataloader, _ = get_loaders(args.dataset, nsamples=args.updating_nsamples, seed=args.seed, tokenizer=tokenizer, seqlen=args.model_seq_len)
         model = model.eval()
         model = model.float()  # need to set to float
@@ -550,7 +551,7 @@ if __name__ == '__main__':
         if args.save_path is not None:
             torch.save({'model': model, 'tokenizer': tokenizer}, args.save_path + "/" + args.model.replace("/", "_").replace("-", "_") +'_whitening_then_update_' + str(args.ratio) + '.pt')  # fp32
     elif args.step == 3:
-        model, tokenizer = get_model_from_huggingface(args.model)
+        model, tokenizer = get_model_from_huggingface(model_id=args.model, cache_dir=args.cache_dir)
         model = model.eval()
         model = model.float()
         dataloader, _ = get_loaders(args.dataset, nsamples=args.updating_nsamples, seed=args.seed, tokenizer=tokenizer, seqlen=args.model_seq_len)

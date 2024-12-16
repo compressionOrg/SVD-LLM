@@ -2,3 +2,7 @@
 cache/*
 **/__pycache__
 utils/c4-*
+*.log
+*.pt
+datasets
+llm_weights
