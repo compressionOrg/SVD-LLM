@@ -29,16 +29,6 @@
 </div>
 </div>
 
-## ✨Roadmap
-We are working on the following tasks, please stay tuned!
-
-- [X] Release the code of SVD-LLM.
-- [ ] Release the code of SVD-LLM V2.
-- [ ] Upgrade the transformers package to the latest version.
-- [ ] Update the efficiency evaluation code.
-- [ ] Optimize the compression of GQA-based LLMs.
-
-
 ## Introduction
   
 > **[SVD-LLM: Truncation-aware Singular Value Decomposition for Large Language Model Compression](https://openreview.net/forum?id=LNYIUouhdt&referrer=%5BAuthor%20Console%5D(%2Fgroup%3Fid%3DICLR.cc%2F2025%2FConference%2FAuthors%23your-submissions))**
