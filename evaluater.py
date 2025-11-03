@@ -6,10 +6,90 @@ import itertools
 from utils.data_utils import get_test_data
 import os
 import sys
+from typing import  Literal
+
+from lm_eval.base import BaseLM
+from lm_eval import evaluator
 
 current_path = os.path.dirname(os.path.abspath(__file__))
 parent_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(current_path)
+
+
+class EvalLM(BaseLM):
+    def __init__(
+        self,
+        model,
+        tokenizer,
+        device: Literal["cuda:0", "cpu"] = "cuda:0",
+        batch_size=1,
+    ):
+        super().__init__()
+
+        # assert isinstance(device, str)
+        assert isinstance(batch_size, int)
+
+        # self.model = model.to(self.device)
+        self.model = model
+        self.model.eval()
+
+        self._device = self.model.device 
+
+        self.tokenizer = tokenizer
+
+        self.vocab_size = self.tokenizer.vocab_size
+
+        self.batch_size_per_gpu = batch_size  # todo: adaptive batch size
+
+        self.seqlen = 2048
+
+    @property
+    def eot_token_id(self):
+        # we use EOT because end of *text* is more accurate for what we're doing than end of *sentence*
+        return self.tokenizer.eos_token_id
+
+    @property
+    def max_length(self):
+        try:
+            return self.model.config.n_ctx
+        except AttributeError:
+            # gptneoconfig doesn't have n_ctx apparently
+            return self.model.config.max_position_embeddings
+
+    @property
+    def max_gen_toks(self):
+        return 256
+
+    @property
+    def batch_size(self):
+        # TODO: fix multi-gpu
+        return self.batch_size_per_gpu  # * gpus
+
+    @property
+    def device(self):
+        # TODO: fix multi-gpu
+        return self._device
+
+    def tok_encode(self, string: str):
+        return self.tokenizer.encode(string, add_special_tokens=False)
+    
+    def tok_decode(self, tokens):
+        return self.tokenizer.decode(tokens)
+
+    def _model_call(self, inps):
+        """
+        inps: a torch tensor of shape [batch, sequence]
+        the size of sequence may vary from call to call
+
+        returns: a torch tensor of shape [batch, sequence, vocab] with the
+        logits returned from the model
+        """
+        with torch.no_grad():
+            return self.model(inps)[0][:, :, :self.vocab_size]
+
+    def _model_generate(self, context, max_length, eos_token_id):
+        return self.model.generate(context, max_length=max_length, eos_token_id=eos_token_id, do_sample=False)
+
 
 @torch.no_grad()
 def ppl_eval(model, tokenizer, datasets=['wikitext2', 'ptb', 'c4'], model_seq_len=2048, batch_size=32, device="cuda"):
@@ -34,6 +114,53 @@ def ppl_eval(model, tokenizer, datasets=['wikitext2', 'ptb', 'c4'], model_seq_le
         ppls[dataset] = ppl
     print("PPL after pruning: {}".format(ppls))
     print("Weight Memory: {} MiB\n".format(torch.cuda.memory_allocated()/1024/1024))
+
+@torch.no_grad()
+def zeroshot_eval(
+    model,
+    tokenizer,
+    tasks: Literal["boolq", "piqa", "hellaswag", "winogrande", "arc_easy", "arc_challenge", "openbookqa"],
+    num_fewshot=0,
+    limit=-1,
+    batch_size=1,
+    device: Literal["cuda", "cpu"] = "cuda"):
+    """
+    model: model name
+    limit: number of test samples for debug, set to -1 is no limit
+    tasks: str tasks are split by ,
+    num_fewshot: Number of examples in few-shot context
+    eval_ppl: str datasets are split by , such as 'wikitext2,ptb,c4'
+    """
+    lm = EvalLM(model, tokenizer, batch_size=batch_size, device=device)
+    
+    results = {}
+            
+    if tasks != "":
+        t_results = evaluator.simple_evaluate(
+            lm,
+            tasks=tasks.split(","),
+            batch_size=batch_size,
+            num_fewshot=num_fewshot,
+            limit=None if limit == -1 else limit,
+            no_cache=True,
+        )
+        t_results = t_results["results"]
+        acc_list = [t_results[key]["acc"] for key in t_results.keys() if "acc" in t_results[key]]
+        mean_acc = sum(acc_list) / len(acc_list)
+        t_results["mean"] = mean_acc
+        results.update(t_results)
+        
+        print("\n" + "="*50)
+        print("EVALUATION RESULTS (formatted for easy copying)")
+        print("="*50)
+        
+        for task_name in sorted(t_results.keys()):
+            if task_name != "mean" and "acc" in t_results[task_name]:
+                acc_value = t_results[task_name]["acc"] * 100  
+                print(f"{task_name}: {acc_value:.2f}%")
+        print(f"mean: {mean_acc * 100:.2f}%")  
+    return results
+
 
 # only call this function when for 65b or more model    
 @torch.no_grad()
@@ -121,6 +248,9 @@ def ppl_eval_large(model, tokenizer, datasets=['wikitext2', 'ptb', 'c4'], seq_le
     print("PPL after pruning: {}".format(ppls))
     print("Weight Memory: {} MiB\n".format(torch.cuda.memory_allocated()/1024/1024))
 
+
+
+
 @torch.no_grad()
 def eff_eval(model, tokenizer, dataset='wikitext2', original_len=4, generated_len=128, batch_size=1, device="cuda"):
     model.eval()
@@ -158,4 +288,3 @@ def eff_eval(model, tokenizer, dataset='wikitext2', original_len=4, generated_le
     print("Weight Memory: {} GB".format(weight_memory/(1024 ** 3)))
     print("Activation Memory: {} GB".format((end_memory - start_memory)/(1024 ** 3)))
     print("Throughput: {} tokens/sec".format(token_num / throughput))
-

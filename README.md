@@ -53,8 +53,8 @@
 Please keep the version of the transformers package exactly equal to 4.35.2 since the svd-compressed version of LLM has a slight change of model structure (in the `component/.` folder).
 Create and set up a conda environment with python version 3.9 (newer versions break some dependencies)
 ```
-conda create -n compress python=3.9
-conda activate compress
+conda create -n svd_llm python=3.9
+conda activate svd_llm
 ```
 Clone and navigate to the repository
 ```

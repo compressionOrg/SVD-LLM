@@ -518,7 +518,7 @@ if __name__ == '__main__':
     parser.add_argument('--gen_seq_len', type=int, default=1024, help='generated sequence len for efficiency evaluation')
     parser.add_argument('--step', type=int, default=4, help='the step to run the compression')
     parser.add_argument('--lora', type=str, default=None, help='the lora updated weight path to run the accuracy evaluation')
-    
+    parser.add_argument('--tasks', type=str, default="mathqa,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa,boolq",help='Comma-separated list of evaluation tasks')
     args = parser.parse_args()
     args.ratio = 1- args.ratio
     if args.step == 1:
@@ -577,5 +577,7 @@ if __name__ == '__main__':
         model = model.to(args.DEV)
         if args.step == 4:
             ppl_eval(model, tokenizer, datasets=['wikitext2'], model_seq_len=args.model_seq_len, batch_size=args.eval_batch_size, device=args.DEV)
+            zeroshot_eval(model, tokenizer, tasks=args.tasks,  batch_size=args.eval_batch_size, device=args.DEV)
+            
         elif args.step == 5:
             eff_eval(model, tokenizer, generated_len=args.gen_seq_len, batch_size=args.eval_batch_size, device=args.DEV)
