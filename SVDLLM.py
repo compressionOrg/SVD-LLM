@@ -575,8 +575,8 @@ if __name__ == '__main__':
         model.eval()
         model = model.float()
         model = model.to(args.DEV)
-        if args.step == 4:
-            ppl_eval(model, tokenizer, datasets=['wikitext2'], model_seq_len=args.model_seq_len, batch_size=args.eval_batch_size, device=args.DEV)
+        if args.step == 4: #  
+            ppl_eval(model, tokenizer, datasets=['wikitext2', 'ptb', 'c4'], model_seq_len=args.model_seq_len, batch_size=args.eval_batch_size, device=args.DEV)
             zeroshot_eval(model, tokenizer, tasks=args.tasks,  batch_size=args.eval_batch_size, device=args.DEV)
             
         elif args.step == 5:

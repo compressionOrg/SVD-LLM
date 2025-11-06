@@ -1,19 +1,16 @@
 #!/bin/bash
 
 set -x
-
+export CUDA_VISIBLE_DEVICES=0
 # model="meta-llama/Llama-2-13b-hf"
 # model="mistralai/Mistral-7B-v0.3"
 model="meta-llama/Meta-Llama-3-8B"
 model_name=$(echo "$model" | tr '/-' '_')
 
 # sparsity_ratios=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8) # 
-sparsity_ratios=(0.2)
+sparsity_ratios=(0.1 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
 whitening_nsamples=256
 seed=3
-
-
-export CUDA_VISIBLE_DEVICES=2
 
 # run data whitening with 20% compression ratio
 # python SVDLLM.py --model Enoch/llama-7b-hf --step 1 --ratio 0.2 --whitening_nsamples 256 --dataset wikitext2 --seed 3 --model_seq_len 2048 --save_path .
@@ -44,9 +41,9 @@ do
     ratio=$(python3 -c "print(f'{1 - $sparsity_ratio:.1f}')")
     echo "ratio:$ratio"
     # create whitening 
-    # create_whitening ${sparsity_ratio}
+    create_whitening ${sparsity_ratio}
     # evaluate
-    evaluate_whitening 4 "${ratio}"
+    # evaluate_whitening 4 "${ratio}"
     # evaluate_whitening 5 "${ratio}"
 done
 

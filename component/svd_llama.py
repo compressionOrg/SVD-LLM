@@ -111,7 +111,7 @@ class SVD_LlamaMLP(nn.Module):
 
 
 class SVD_LlamaAttention(nn.Module):
-    """Multi-headed attention from 'Attention Is All You Need' paper"""
+    """Multi-headed attention adapted for Llama-style GQA (grouped key/value heads)."""
 
     def __init__(self, config: LlamaConfig, ratio=1):
         super().__init__()
@@ -119,22 +119,26 @@ class SVD_LlamaAttention(nn.Module):
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
         self.head_dim = self.hidden_size // self.num_heads
+        # Llama3 uses Grouped-Query Attention: num_key_value_heads may be < num_heads
+        # Use getattr for backward compatibility with configs lacking this attribute
+        self.num_key_value_heads = getattr(config, "num_key_value_heads", self.num_heads)
+        self.num_key_value_groups = self.num_heads // max(self.num_key_value_heads, 1)
         self.max_position_embeddings = config.max_position_embeddings
-        self.ratio = ratio # 1 means no truncate, just keep normal attn
+        self.ratio = ratio  # 1 means no truncate, just keep normal attn
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
                 f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
                 f" and `num_heads`: {self.num_heads})."
             )
-        low_rank = int(self.hidden_size * self.ratio/2)
+        low_rank = int(self.hidden_size * self.ratio / 2)
+        # q projects to all query heads
         self.q_u_proj = nn.Linear(low_rank, self.num_heads * self.head_dim, bias=False)
         self.q_v_proj = nn.Linear(self.hidden_size, low_rank, bias=False)
-
-        self.k_u_proj = nn.Linear(low_rank, self.num_heads * self.head_dim, bias=False)
+        # k/v project to key/value heads (possibly fewer than query heads)
+        self.k_u_proj = nn.Linear(low_rank, self.num_key_value_heads * self.head_dim, bias=False)
         self.k_v_proj = nn.Linear(self.hidden_size, low_rank, bias=False)
-
-        self.v_u_proj = nn.Linear(low_rank, self.num_heads * self.head_dim, bias=False)
+        self.v_u_proj = nn.Linear(low_rank, self.num_key_value_heads * self.head_dim, bias=False)
         self.v_v_proj = nn.Linear(self.hidden_size, low_rank, bias=False)
 
         self.o_u_proj = nn.Linear(low_rank, self.hidden_size, bias=False)
@@ -142,8 +146,13 @@ class SVD_LlamaAttention(nn.Module):
 
         self.rotary_emb = LlamaRotaryEmbedding(self.head_dim, max_position_embeddings=self.max_position_embeddings)
 
-    def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
-        return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+    def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int, heads: int):
+        # Robust reshape: if requested heads mismatch actual last-dim, infer heads from tensor size.
+        expected = bsz * seq_len * heads * self.head_dim
+        if tensor.numel() != expected:
+            inferred_heads = max(tensor.shape[-1] // self.head_dim, 1)
+            heads = inferred_heads
+        return tensor.view(bsz, seq_len, heads, self.head_dim).transpose(1, 2).contiguous()
 
     def forward(
         self,
@@ -155,27 +164,42 @@ class SVD_LlamaAttention(nn.Module):
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         bsz, q_len, _ = hidden_states.size()
-    
-        query_states = self.q_u_proj(self.q_v_proj(hidden_states)).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
 
-        key_states = self.k_u_proj(self.k_v_proj(hidden_states)).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-
-        value_states = self.v_u_proj(self.v_v_proj(hidden_states)).view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        query_states = self._shape(self.q_u_proj(self.q_v_proj(hidden_states)), q_len, bsz, self.num_heads)
+        # Dynamically infer kv heads from actual projection output shapes to be robust
+        k_linear = self.k_u_proj(self.k_v_proj(hidden_states))
+        v_linear = self.v_u_proj(self.v_v_proj(hidden_states))
+        kv_heads = max(k_linear.shape[-1] // self.head_dim, 1)
+        key_states = self._shape(k_linear, q_len, bsz, kv_heads)
+        value_states = self._shape(v_linear, q_len, bsz, kv_heads)
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
             kv_seq_len += past_key_value[0].shape[-2]
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
- 
+
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
         # [bsz, nh, t, hd]
 
         if past_key_value is not None:
-            # reuse k, v, self_attention
+            # reuse k, v, self_attention (cache stores non-repeated k/v to save memory)
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
             value_states = torch.cat([past_key_value[1], value_states], dim=2)
-
+        # Save cache BEFORE repeating, consistent with HF Llama implementations
         past_key_value = (key_states, value_states) if use_cache else None
+        # Expand k/v from num_key_value_heads to num_heads (grouped query attention)
+        if kv_heads != self.num_heads:
+            # Copied from transformers.models.llama.modeling_llama.repeat_kv
+            def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+                hidden_states = hidden_states.unsqueeze(2).expand(
+                    hidden_states.size(0), hidden_states.size(1), n_rep, hidden_states.size(2), hidden_states.size(3)
+                )
+                return hidden_states.reshape(
+                    hidden_states.size(0), hidden_states.size(1) * n_rep, hidden_states.size(3), hidden_states.size(4)
+                )
+            num_key_value_groups = self.num_heads // kv_heads
+            key_states = repeat_kv(key_states, num_key_value_groups)
+            value_states = repeat_kv(value_states, num_key_value_groups)
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
@@ -203,8 +227,8 @@ class SVD_LlamaAttention(nn.Module):
                 f" {attn_output.size()}"
             )
 
-        attn_output = attn_output.transpose(1, 2)
-        attn_output = attn_output.reshape(bsz, q_len, -1)
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.reshape(bsz, q_len, self.num_heads * self.head_dim)
 
         attn_output = self.o_u_proj(self.o_v_proj(attn_output))
 
