@@ -5,13 +5,13 @@ set -x
 model="meta-llama/Llama-2-13b-hf"
 model_name=$(echo "$model" | tr '/-' '_')
 
-# sparsity_ratios=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8) # 
-sparsity_ratios=(0.2)
+sparsity_ratios=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8) # 
+# sparsity_ratios=(0.2)
 whitening_nsamples=256
 seed=3
 
 
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=2
 
 # run data whitening with 20% compression ratio
 # python SVDLLM.py --model Enoch/llama-7b-hf --step 1 --ratio 0.2 --whitening_nsamples 256 --dataset wikitext2 --seed 3 --model_seq_len 2048 --save_path .

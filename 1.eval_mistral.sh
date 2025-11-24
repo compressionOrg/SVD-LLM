@@ -2,11 +2,11 @@
 
 set -x
 
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=0
 
 # model="meta-llama/Llama-2-13b-hf"
-# model="mistralai/Mistral-7B-v0.3"
-model="meta-llama/Meta-Llama-3-8B"
+model="mistralai/Mistral-7B-v0.1"
+# model="lmsys/vicuna-7b-v1.5"
 model_name=$(echo "$model" | tr '/-' '_')
 
 sparsity_ratios=(0.4 0.6 0.8 0.7 0.5 0.3 0.1 ) # 
