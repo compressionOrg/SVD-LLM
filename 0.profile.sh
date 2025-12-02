@@ -4,11 +4,11 @@ set -x
 export CUDA_VISIBLE_DEVICES=0
 # model="meta-llama/Llama-2-13b-hf"
 # model="mistralai/Mistral-7B-v0.1"
-model="meta-llama/Meta-Llama-3-8B"
+model="meta-llama/Llama-3.1-8B"
 model_name=$(echo "$model" | tr '/-' '_')
 
 # sparsity_ratios=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8) # 
-sparsity_ratios=(0.1 0.3 0.4 0.5 0.6 0.7 0.8 0.9)
+sparsity_ratios=(0.3) # 0.4 0.5 0.6 0.7
 whitening_nsamples=256
 seed=3
 

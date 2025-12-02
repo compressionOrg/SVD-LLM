@@ -94,22 +94,48 @@ def profle_svdllm_low_resource(model_name, model, calib_loader, dev):
     inps = torch.zeros(
         (len(calib_loader), model.seqlen, model.config.hidden_size), dtype=dtype, device=dev
     )
-    cache = {'i': 0, 'attention_mask': None, "position_ids": None}
+    cache = {'i': 0, 'attention_mask': None, "position_ids": None, 'cache_position': None, 'position_embeddings': None}
     class Catcher(nn.Module):
         def __init__(self, module):
             super().__init__()
             self.module = module
         def forward(self, inp, **kwargs):
-            inps[cache['i']] = inp.cpu()
+            inps[cache['i']] = inp
             cache['i'] += 1
             if cache['attention_mask'] is None:
-                cache['attention_mask'] = kwargs['attention_mask'].cpu()
+                attn = kwargs.get('attention_mask', None)
+                cache['attention_mask'] = attn.cpu() if attn is not None else None
                 if "opt" not in model_name:
-                    cache['position_ids'] = kwargs['position_ids'].cpu()
+                    pos_ids = kwargs.get('position_ids', None)
+                    cache['position_ids'] = pos_ids.cpu() if pos_ids is not None else None
+                    cache_pos = kwargs.get('cache_position', None)
+                    cache['cache_position'] = cache_pos.cpu() if cache_pos is not None else None
+                    pos_embs = kwargs.get('position_embeddings', None)
+                    if pos_embs is not None:
+                        cos, sin = pos_embs
+                        cache['position_embeddings'] = (cos.cpu(), sin.cpu())
             else:
-                cache['attention_mask'] = torch.cat((cache['attention_mask'], kwargs['attention_mask'].cpu()), dim=0)
+                attn = kwargs.get('attention_mask', None)
+                if attn is not None:
+                    cache['attention_mask'] = torch.cat((cache['attention_mask'], attn.cpu()), dim=0)
                 if "opt" not in model_name:
-                    cache['position_ids'] = torch.cat((cache['position_ids'], kwargs['position_ids'].cpu()), dim=0)
+                    pos_ids = kwargs.get('position_ids', None)
+                    if pos_ids is not None:
+                        cache['position_ids'] = torch.cat((cache['position_ids'], pos_ids.cpu()), dim=0)
+                    cache_pos = kwargs.get('cache_position', None)
+                    if cache_pos is not None:
+                        cache['cache_position'] = torch.cat((cache['cache_position'], cache_pos.cpu()), dim=0)
+                    pos_embs = kwargs.get('position_embeddings', None)
+                    if pos_embs is not None:
+                        cos, sin = pos_embs
+                        cached = cache['position_embeddings']
+                        if cached is None:
+                            cache['position_embeddings'] = (cos.cpu(), sin.cpu())
+                        else:
+                            cache['position_embeddings'] = (
+                                torch.cat((cached[0], cos.cpu()), dim=0),
+                                torch.cat((cached[1], sin.cpu()), dim=0),
+                            )
             raise ValueError
     layers[0] = Catcher(layers[0])
     for batch in calib_loader:
@@ -132,6 +158,8 @@ def profle_svdllm_low_resource(model_name, model, calib_loader, dev):
     attention_masks = cache['attention_mask']
     if "opt" not in model_name:
         position_ids = cache['position_ids']
+        cache_position = cache['cache_position']
+        position_embeddings = cache['position_embeddings']
     profiling_mat = {}
     for i in tqdm(range(len(layers))):
         layer_profile = {}
@@ -152,9 +180,36 @@ def profle_svdllm_low_resource(model_name, model, calib_loader, dev):
             handles.append(subset[name].register_forward_hook(hook))
         for j in range(inps.shape[0]):
             if "opt" not in model_name:
-                outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_masks[j].unsqueeze(0).to(dev), position_ids=position_ids[j].unsqueeze(0).to(dev))[0]
+                kwargs = {}
+                if attention_masks is not None:
+                    kwargs['attention_mask'] = attention_masks[j].unsqueeze(0).to(dev)
+                if position_ids is not None:
+                    if position_ids.shape[0] == 1:
+                        kwargs['position_ids'] = position_ids.to(dev)
+                    else:
+                        kwargs['position_ids'] = position_ids[j].unsqueeze(0).to(dev)
+                if cache_position is not None:
+                    if cache_position.shape[0] == 1:
+                        kwargs['cache_position'] = cache_position.to(dev)
+                    else:
+                        kwargs['cache_position'] = cache_position[j].unsqueeze(0).to(dev)
+                if position_embeddings is not None:
+                    if position_embeddings[0].shape[0] == 1:
+                        cos_j = position_embeddings[0].to(dev)
+                        sin_j = position_embeddings[1].to(dev)
+                    else:
+                        cos_j = position_embeddings[0][j].unsqueeze(0).to(dev)
+                        sin_j = position_embeddings[1][j].unsqueeze(0).to(dev)
+                    kwargs['position_embeddings'] = (cos_j, sin_j)
+                outs[j] = layer(inps[j].unsqueeze(0), **kwargs)[0]
             else:
-                outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_masks[j].unsqueeze(0).to(dev))[0]
+                if attention_masks is not None:
+                    outs[j] = layer(
+                        inps[j].unsqueeze(0),
+                        attention_mask=attention_masks[j].unsqueeze(0).to(dev),
+                    )[0]
+                else:
+                    outs[j] = layer(inps[j].unsqueeze(0))[0]
         for h in handles:
             h.remove()
         layer = layer.cpu()
@@ -197,7 +252,7 @@ def whitening(model_name, model, profiling_mat, ratio, dev):
         #### Replace Attn, MLP ####
         if "llama" in model_name or "vicuna" in model_name:
             svd_attn = SVD_LlamaAttention(config=model.config, ratio=ratio)
-            svd_mlp = SVD_LlamaMLP(hidden_size=layer.hidden_size, intermediate_size=model.config.intermediate_size, hidden_act=model.config.hidden_act, ratio=ratio)
+            svd_mlp = SVD_LlamaMLP(config=model.config, ratio=ratio)
         elif "mistral" in model_name:
             svd_attn = SVD_MistralAttention(config=model.config, ratio=ratio)
             svd_mlp = SVD_MistralMLP(config=model.config, ratio=ratio)
