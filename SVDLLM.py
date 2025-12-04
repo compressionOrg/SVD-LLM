@@ -103,12 +103,14 @@ def profle_svdllm_low_resource(model_name, model, calib_loader, dev):
             inps[cache['i']] = inp.cpu()
             cache['i'] += 1
             if cache['attention_mask'] is None:
-                cache['attention_mask'] = kwargs['attention_mask'].cpu()
-                if "opt" not in model_name:
+                if kwargs.get('attention_mask') is not None:
+                    cache['attention_mask'] = kwargs['attention_mask'].cpu()
+                if "opt" not in model_name and kwargs.get('position_ids') is not None:
                     cache['position_ids'] = kwargs['position_ids'].cpu()
             else:
-                cache['attention_mask'] = torch.cat((cache['attention_mask'], kwargs['attention_mask'].cpu()), dim=0)
-                if "opt" not in model_name:
+                if kwargs.get('attention_mask') is not None:
+                    cache['attention_mask'] = torch.cat((cache['attention_mask'], kwargs['attention_mask'].cpu()), dim=0)
+                if "opt" not in model_name and kwargs.get('position_ids') is not None:
                     cache['position_ids'] = torch.cat((cache['position_ids'], kwargs['position_ids'].cpu()), dim=0)
             raise ValueError
     layers[0] = Catcher(layers[0])
@@ -152,9 +154,9 @@ def profle_svdllm_low_resource(model_name, model, calib_loader, dev):
             handles.append(subset[name].register_forward_hook(hook))
         for j in range(inps.shape[0]):
             if "opt" not in model_name:
-                outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_masks[j].unsqueeze(0).to(dev), position_ids=position_ids[j].unsqueeze(0).to(dev))[0]
+                outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_masks[j].unsqueeze(0).to(dev) if attention_masks is not None else None, position_ids=position_ids[j].unsqueeze(0).to(dev) if position_ids is not None else None)[0]
             else:
-                outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_masks[j].unsqueeze(0).to(dev))[0]
+                outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_masks[j].unsqueeze(0).to(dev) if attention_masks is not None else None)[0]
         for h in handles:
             h.remove()
         layer = layer.cpu()
