@@ -2,7 +2,7 @@
 export CUDA_VISIBLE_DEVICES=2
 set -x
 # "meta-llama/Llama-2-13b-hf"  "meta-llama/Meta-Llama-3-8B" "Enoch/llama-13b-hf"  "facebook/opt-6.7b"
-models=("Enoch/llama-7b-hf") # "meta-llama/Llama-2-7b-hf"
+models=("meta-llama/Llama-2-7b-hf") # "meta-llama/Llama-2-7b-hf" "Enoch/llama-7b-hf"
 
 
 # sparsity_ratios=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9)

@@ -44,7 +44,7 @@ def apply_lora(model, tokenizer, batch_size=64, micro_batch_size=4, cutoff_len=2
     prompter = ZeroPrompter()
 
     if device == 'cuda':
-        model.half()
+        model.to(torch.bfloat16)
 
     tokenizer.pad_token_id = 0
     tokenizer.padding_side = "left"
@@ -155,7 +155,7 @@ def apply_lora(model, tokenizer, batch_size=64, micro_batch_size=4, cutoff_len=2
             warmup_steps=100,
             num_train_epochs=num_epochs,
             learning_rate=learning_rate,
-            fp16=True,
+            bf16=True,
             logging_steps=10,
             logging_first_step=True,
             optim="adamw_torch",
@@ -202,7 +202,7 @@ def main(args):
         prompter = ZeroPrompter()
 
     if device == 'cuda':
-        model.half()
+        model.to(torch.bfloat16)
 
     tokenizer.pad_token_id = 0
     tokenizer.padding_side = "left"

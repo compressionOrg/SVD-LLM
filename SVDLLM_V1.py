@@ -518,7 +518,7 @@ if __name__ == '__main__':
     parser.add_argument('--gen_seq_len', type=int, default=1024, help='generated sequence len for efficiency evaluation')
     parser.add_argument('--step', type=int, default=4, help='the step to run the compression')
     parser.add_argument('--lora', type=str, default=None, help='the lora updated weight path to run the accuracy evaluation')
-    parser.add_argument('--tasks', type=str, default="mathqa,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa",help='Comma-separated list of evaluation tasks')
+    parser.add_argument('--tasks', type=str, default="mathqa,piqa,hellaswag,winogrande,arc_easy,arc_challenge,openbookqa,boolq",help='Comma-separated list of evaluation tasks')
     args = parser.parse_args()
     args.ratio = 1- args.ratio
     if args.step == 1:
@@ -526,12 +526,18 @@ if __name__ == '__main__':
         model = model.eval()
         if args.profiling_mat_path is None:
             cali_white_data = get_calib_train_data(args.dataset, tokenizer, args.whitening_nsamples, seqlen=args.model_seq_len)
+            profile_start = time.time()
             profiling_mat = profle_svdllm_low_resource(args.model, model, cali_white_data, args.DEV)
+            profile_end = time.time()
+            print(f"profiling time: {profile_end - profile_start}")
             if args.save_path is not None:
                 torch.save(profiling_mat, args.save_path + "/" + args.model.replace("/", "_").replace("-", "_") + '_profiling_'+ args.dataset + '_' + str(args.whitening_nsamples)  + '_' + str(args.seed)+ '.pt')
         else:
             profiling_mat = torch.load(args.profiling_mat_path)
+        white_start = time.time()
         whitening(args.model, model, profiling_mat, args.ratio, args.DEV)
+        white_end = time.time()
+        print(f"whitening time: {white_end - white_start}")
         if args.save_path is not None:
             torch.save({'model': model, 'tokenizer': tokenizer}, args.save_path + "/" + args.model.replace("/", "_").replace("-", "_") +'_whitening_only_' + str(args.ratio) + '.pt')   # fp32
     elif args.step == 2:
@@ -576,7 +582,7 @@ if __name__ == '__main__':
         model = model.float()
         model = model.to(args.DEV)
         if args.step == 4: #  
-            ppl_eval(model, tokenizer, datasets=['wikitext2',  'c4'], model_seq_len=args.model_seq_len, batch_size=args.eval_batch_size, device=args.DEV)
+            ppl_eval(model, tokenizer, datasets=['wikitext2', 'ptb', 'c4'], model_seq_len=args.model_seq_len, batch_size=args.eval_batch_size, device=args.DEV)
             zeroshot_eval(model, tokenizer, tasks=args.tasks,  batch_size=args.eval_batch_size, device=args.DEV)
             
         elif args.step == 5:
