@@ -77,7 +77,24 @@ def profle_svdllm(name, model, calib_loader, dev):
     return profiling_mat
         
 
-@torch.no_grad()
+def robust_cholesky(matrix, dev):
+    """
+    鲁棒的 Cholesky 分解，处理非正定矩阵的情况
+    """
+    try:
+        L = torch.linalg.cholesky(matrix)
+    except Exception as e:
+        eigenvalues = torch.linalg.eigvalsh(matrix)
+        min_eig = eigenvalues[0]
+        jitter = (-min_eig + 1e-6) * torch.eye(matrix.shape[0]).to(dev)
+        matrix += jitter
+        try:
+            L = torch.linalg.cholesky(matrix)
+        except:
+            L = torch.sqrt(torch.diag(matrix).abs()).diag()
+    return L
+
+
 def profle_svdllm_low_resource(model_name, model, calib_loader, dev):
     if "opt" in model_name:
         layers = model.model.decoder.layers
@@ -138,12 +155,13 @@ def profle_svdllm_low_resource(model_name, model, calib_loader, dev):
                             )
             raise ValueError
     layers[0] = Catcher(layers[0])
-    for batch in calib_loader:
-        try:
-            batch = {k: v.to(dev) for k, v in batch.items()}
-            model(**batch)
-        except ValueError:
-            pass
+    with torch.no_grad():
+        for batch in calib_loader:
+            try:
+                batch = {k: v.to(dev) for k, v in batch.items()}
+                model(**batch)
+            except ValueError:
+                pass
     layers[0] = layers[0].module
     layers[0] = layers[0].cpu()
     if "opt" in model_name:
@@ -161,24 +179,59 @@ def profle_svdllm_low_resource(model_name, model, calib_loader, dev):
         cache_position = cache['cache_position']
         position_embeddings = cache['position_embeddings']
     profiling_mat = {}
-    for i in tqdm(range(len(layers))):
+    num_layers = len(layers)
+    for i in tqdm(range(num_layers), desc="Profiling Layers"):
         layer_profile = {}
         layer = layers[i].to(dev)
-        subset = find_layers(layer)        
-        def hook(module, input, output):
-            inp = input[0].detach().float()
-            if inp.dim() == 2:  # for opt
-                inp = inp.unsqueeze(0)
-            adds = torch.matmul(inp.transpose(1,2), inp)
-            adds_sum = torch.sum(adds, dim=0)
-            module.scaling_diag_matrix += adds_sum
-            del inp, adds, adds_sum, output
-            torch.cuda.empty_cache()
+        
+        # [修改点 1] 判断是否为第一层或最后一层
+        # 如果是首尾层，我们只做 Forward (传递 hidden_states)，不做 Hook 和 Backward
+        is_skipped_layer = (i == 0) or (i == num_layers - 1)
+
+        subset = find_layers(layer)
         handles = []
-        for name in subset:
-            subset[name].scaling_diag_matrix = 0
-            handles.append(subset[name].register_forward_hook(hook))
+
+        if not is_skipped_layer:
+            # 只有非跳过层才需要开启梯度和注册 Hook
+            for param in layer.parameters():
+                param.requires_grad = True
+
+            # --- 定义 Hooks ---
+            def forward_hook_fn(module, input, output):
+                inp = input[0].detach().float()
+                if inp.dim() == 2: inp = inp.unsqueeze(0)
+                adds = torch.matmul(inp.transpose(1, 2), inp)
+                adds_sum = torch.sum(adds, dim=0)
+                if not hasattr(module, 'scaling_diag_in'):
+                    module.scaling_diag_in = adds_sum
+                else:
+                    module.scaling_diag_in += adds_sum
+
+            def backward_hook_fn(module, grad_input, grad_output):
+                grad = grad_output[0].detach().float()
+                if grad.dim() == 2: grad = grad.unsqueeze(0)
+                g = grad.reshape(-1, grad.shape[-1])
+                cov_out = torch.matmul(g.t(), g)
+                if not hasattr(module, 'scaling_diag_out'):
+                    module.scaling_diag_out = cov_out
+                else:
+                    module.scaling_diag_out += cov_out
+
+            # 注册 Hooks
+            for name in subset:
+                handles.append(subset[name].register_forward_hook(forward_hook_fn))
+                handles.append(subset[name].register_full_backward_hook(backward_hook_fn))
+        else:
+            # 即使跳过 Profiling，也建议设为 eval 模式以节省显存
+            layer.eval()
+
         for j in range(inps.shape[0]):
+            inp_batch = inps[j].unsqueeze(0).to(dev)
+            
+            # 只有非跳过层需要梯度追踪
+            if not is_skipped_layer:
+                inp_batch = inp_batch.requires_grad_(True)
+            
             if "opt" not in model_name:
                 kwargs = {}
                 if attention_masks is not None:
@@ -201,38 +254,58 @@ def profle_svdllm_low_resource(model_name, model, calib_loader, dev):
                         cos_j = position_embeddings[0][j].unsqueeze(0).to(dev)
                         sin_j = position_embeddings[1][j].unsqueeze(0).to(dev)
                     kwargs['position_embeddings'] = (cos_j, sin_j)
-                outs[j] = layer(inps[j].unsqueeze(0), **kwargs)[0]
+                out = layer(inp_batch, **kwargs)[0]
             else:
                 if attention_masks is not None:
-                    outs[j] = layer(
-                        inps[j].unsqueeze(0),
+                    out = layer(
+                        inp_batch,
                         attention_mask=attention_masks[j].unsqueeze(0).to(dev),
                     )[0]
                 else:
-                    outs[j] = layer(inps[j].unsqueeze(0))[0]
+                    out = layer(inp_batch)[0]
+            
+            outs[j] = out.detach().cpu() # 缓存下一层的输入
+
+            # Backward (仅针对需要压缩的层)
+            if not is_skipped_layer:
+                loss = out.norm() 
+                model.zero_grad()
+                loss.backward()
+                del loss
+            
+            del inp_batch, out
+        
+        # 移除 Hooks
         for h in handles:
             h.remove()
-        layer = layer.cpu()
-        for name in subset:
-            subset[name].scaling_diag_matrix = subset[name].scaling_diag_matrix.cpu()
-        torch.cuda.empty_cache()
-        for name in subset:
-            raw_scaling_diag_matrix = subset[name].scaling_diag_matrix.double().to(dev)
-            try:
-                scaling_diag_matrix = torch.linalg.cholesky(raw_scaling_diag_matrix)
-            except Exception as e:
-                print("Warning: eigen scaling_diag_matrix is not positive!")
-                eigenvalues = torch.linalg.eigvalsh(raw_scaling_diag_matrix)
-                raw_scaling_diag_matrix += (- eigenvalues[0] + 1e-6) * torch.eye(raw_scaling_diag_matrix.shape[0]).to(dev)
-                scaling_diag_matrix = torch.linalg.cholesky(raw_scaling_diag_matrix)
-                eigenvalues = None
-                del eigenvalues
-            layer_profile[name] = scaling_diag_matrix.cpu()
-            scaling_diag_matrix = raw_scaling_diag_matrix = subset[name].raw_scaling_diag_matrix = None
-            del scaling_diag_matrix, raw_scaling_diag_matrix, subset[name].raw_scaling_diag_matrix
-            torch.cuda.empty_cache()
+        
+        # 处理并保存矩阵 (仅针对非跳过层)
+        if not is_skipped_layer:
+            for name in subset:
+                # 1. 处理 L_in
+                if hasattr(subset[name], 'scaling_diag_in'):
+                    raw_in = subset[name].scaling_diag_in.double().to(dev)
+                    scaling_in = robust_cholesky(raw_in, dev)
+                    del subset[name].scaling_diag_in
+                else:
+                    continue # 异常保护
+
+                # 2. 处理 L_out
+                if hasattr(subset[name], 'scaling_diag_out'):
+                    raw_out = subset[name].scaling_diag_out.double().to(dev)
+                    scaling_out = robust_cholesky(raw_out, dev)
+                    del subset[name].scaling_diag_out
+                else:
+                    scaling_out = torch.eye(raw_in.shape[0], device=dev)
+                
+                layer_profile[name] = {
+                    "in": scaling_in.cpu(),
+                    "out": scaling_out.cpu()
+                }
+            
+            profiling_mat[i] = layer_profile
+        
         layers[i] = layer.cpu()
-        profiling_mat[i] = layer_profile
         inps = outs
         torch.cuda.empty_cache()
     return profiling_mat
@@ -245,48 +318,86 @@ def whitening(model_name, model, profiling_mat, ratio, dev):
         layers = model.model.decoder.layers
     else:
         layers = model.model.layers
-    print("Start SVD decomposition after whitening...")
-    for i in tqdm(range(len(layers))):
+    
+    num_layers = len(layers)
+    print("Start Bi-SVD Decomposition & Replacement...")
+    print(f"Skipping Layer 0 and Layer {num_layers-1} (First & Last).")
+
+    for i in tqdm(range(num_layers), desc="Decomposing Layers"):
+        
+        # [修改点 2] 显式跳过首尾层
+        if i == 0 or i == num_layers - 1:
+            continue
+
+        # 额外的安全性检查：如果在 Profiling 阶段跳过了，profiling_mat 里应该没有这个 key
+        if i not in profiling_mat:
+            continue
+
         layer = layers[i]
         subset = find_layers(layer)
-        #### Replace Attn, MLP ####
+        
+        # 初始化替换模块 (SVD Modules)
         if "llama" in model_name or "vicuna" in model_name:
-            svd_attn = SVD_LlamaAttention(config=model.config, ratio=ratio)
-            svd_mlp = SVD_LlamaMLP(config=model.config, ratio=ratio)
+            svd_attn = SVD_LlamaAttention(config=model.config, layer_idx=i, ratio=ratio)
+            svd_mlp = SVD_LlamaMLP(config=model.config, layer_idx=i, ratio=ratio)
         elif "mistral" in model_name:
             svd_attn = SVD_MistralAttention(config=model.config, ratio=ratio)
             svd_mlp = SVD_MistralMLP(config=model.config, ratio=ratio)
         elif 'opt' in model_name:
             svd_decoder = SVDOPTDecoderLayer(model.config, ratio=ratio)
-        #### Replace Attn, MLP ####
+
         for name in subset:
+            if name not in profiling_mat[i]:
+                continue
+
+            # 获取原始权重 [Out, In]
             W = subset[name].weight.data.float().to(dev)
             dtype = W.dtype
-            scaling_diag_matrix = profiling_mat[i][name].to(dev)
+            
+            # 获取双向校准矩阵
+            L_in = profiling_mat[i][name]["in"].float().to(dev)   
+            L_out = profiling_mat[i][name]["out"].float().to(dev) 
+            
+            # 计算逆矩阵
             try:
-                scaling_matrix_inv = torch.linalg.inv(scaling_diag_matrix)
-            except Exception as e:
-                print("Warning: scaling_diag_matrix is not full rank!")
-                scaling_diag_matrix += 1e-6 * torch.eye(scaling_diag_matrix.shape[0]).to(dev)
-                scaling_matrix_inv = torch.linalg.inv(scaling_diag_matrix)
-            scaling_diag_matrix = scaling_diag_matrix.float()
-            scaling_matrix_inv = scaling_matrix_inv.float()
-            W_scale = torch.matmul(W, scaling_diag_matrix)
+                L_in_inv = torch.linalg.inv(L_in)
+                L_out_inv = torch.linalg.inv(L_out)
+            except Exception:
+                L_in_inv = torch.linalg.pinv(L_in)
+                L_out_inv = torch.linalg.pinv(L_out)
+
+            # --- 核心公式 ---
+            W_scale = torch.matmul(L_out.t(), torch.matmul(W, L_in))
+
+            # SVD 分解
             U, S, VT = torch.linalg.svd(W_scale, full_matrices=False)
-            num_s_after_trunc = int(W.shape[0] * W.shape[1] * ratio / (W.shape[0] + W.shape[1]))
+            
+            # 截断秩计算
+            total_params = W.shape[0] * W.shape[1]
+            target_params = total_params * ratio
+            num_s_after_trunc = int(target_params / (W.shape[0] + W.shape[1]))
+            
             truc_s = S[:num_s_after_trunc]
             truc_u = U[:, :num_s_after_trunc]
-            truc_v = torch.matmul(VT[:num_s_after_trunc, :], scaling_matrix_inv)
+            truc_vt = VT[:num_s_after_trunc, :]
             truc_sigma = torch.diag(truc_s)
-            #### Replace Attn, MLP ####
             sqrtSigma = torch.sqrt(truc_sigma)
-            svd_u = torch.matmul(truc_u, sqrtSigma).cpu().to(dtype)
-            svd_v = torch.matmul(sqrtSigma, truc_v).cpu().to(dtype)
+
+            # --- 逆变换与还原 ---
+            L_out_T_inv = torch.linalg.inv(L_out.t())
+            
+            svd_u = torch.matmul(L_out_T_inv, torch.matmul(truc_u, sqrtSigma))
+            svd_v = torch.matmul(sqrtSigma, torch.matmul(truc_vt, L_in_inv))
+
+            svd_u = svd_u.cpu().to(dtype)
+            svd_v = svd_v.cpu().to(dtype)
+
+            # --- 权重赋值 (Replacement) ---
             if 'opt' in model_name:
                 if "q_proj" in name:
                     svd_decoder.self_attn.q_u_proj.weight.data = svd_u
                     svd_decoder.self_attn.q_v_proj.weight.data = svd_v
-                    svd_decoder.self_attn.q_u_proj.bias.data = layer.self_attn.q_proj.bias.data  # the linear layer in OPT has bias, which is different from LLaMA and Mistral
+                    svd_decoder.self_attn.q_u_proj.bias.data = layer.self_attn.q_proj.bias.data
                 elif "k_proj" in name:
                     svd_decoder.self_attn.k_u_proj.weight.data = svd_u
                     svd_decoder.self_attn.k_v_proj.weight.data = svd_v
@@ -323,7 +434,7 @@ def whitening(model_name, model, profiling_mat, ratio, dev):
                 elif "o_proj" in name:
                     svd_attn.o_u_proj.weight.data = svd_u
                     svd_attn.o_v_proj.weight.data = svd_v
-                    layer.self_attn =  svd_attn
+                    layer.self_attn = svd_attn
                 elif "gate_proj" in name:
                     svd_mlp.gate_u_proj.weight.data = svd_u
                     svd_mlp.gate_v_proj.weight.data = svd_v
@@ -333,11 +444,17 @@ def whitening(model_name, model, profiling_mat, ratio, dev):
                 elif "up_proj" in name:
                     svd_mlp.up_u_proj.weight.data = svd_u
                     svd_mlp.up_v_proj.weight.data = svd_v
-                    layer.mlp = svd_mlp
-            W = W_scale = scaling_matrix_inv = scaling_diag_matrix = U = S = VT  = truc_s = truc_u = truc_v = sqrtSigma = None
-            del  W, W_scale, scaling_matrix_inv, scaling_diag_matrix, U, S, VT, truc_s, truc_u, truc_v, sqrtSigma
+                    layer.mlp = svd_mlp 
+
+            W = W_scale = L_in = L_out = L_in_inv = L_out_inv = U = S = VT = None
+            del W, W_scale, L_in, L_out, U, S, VT
+            torch.cuda.empty_cache()
+            
         del layer
         torch.cuda.empty_cache()
+
+    print("Bi-SVD Decomposition Completed.")
+    return model
 
 
 @torch.no_grad()
@@ -398,8 +515,8 @@ def whitening_local_update(model_name, model, dataloader, profiling_mat, ratio, 
         subset = find_layers(layer)
         gpts = {}
         if "llama" in model_name or "vicuna" in model_name:
-            svd_attn = SVD_LlamaAttention(config=model.config, layer_idx=i, ratio=ratio)
-            svd_mlp = SVD_LlamaMLP(config=model.config, layer_idx=i, ratio=ratio)
+            svd_attn = SVD_LlamaAttention(config=model.config, ratio=ratio)
+            svd_mlp = SVD_LlamaMLP(hidden_size=layer.hidden_size, intermediate_size=model.config.intermediate_size, hidden_act=model.config.hidden_act, ratio=ratio)
         elif "mistral" in model_name:
             svd_attn = SVD_MistralAttention(config=model.config, ratio=ratio)
             svd_mlp = SVD_MistralMLP(config=model.config, ratio=ratio)
