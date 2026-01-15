@@ -1,6 +1,16 @@
 #!/bin/bash
 
 set -x
+
+while true; do
+  if [ -z "$(nvidia-smi -i 3 --query-compute-apps=pid --format=csv,noheader 2>/dev/null)" ]; then
+    echo "GPU 3 is free"
+    break
+  fi
+  echo "GPU 3 is busy, waiting 600s..."
+  sleep 600
+done
+
 export CUDA_VISIBLE_DEVICES=3
 # model="meta-llama/Llama-2-13b-hf"
 # model="mistralai/Mistral-7B-v0.1"
@@ -8,7 +18,7 @@ model="meta-llama/Llama-3.2-3B"
 model_name=$(echo "$model" | tr '/-' '_')
 
 # sparsity_ratios=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8) # 
-sparsity_ratios=(0.4) # 0.4 0.5 0.6 0.7
+sparsity_ratios=(0.3) # 0.4 0.5 0.6 0.7
 whitening_nsamples=256
 seed=3
 
