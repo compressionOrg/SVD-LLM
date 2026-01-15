@@ -47,6 +47,12 @@ def get_calib_train_data(name, tokenizer, nsamples, seqlen=2048, seed=3, batch_s
             inp = trainenc.input_ids[:, :seqlen]
         else:
             inp = torch.cat((inp, trainenc.input_ids[:, :seqlen]), dim=0)
+    
+    # Handle the last batch if it's not added yet
+    if 'inp' in locals() and (len(traindataset) < nsamples // batch_size):
+         attention_mask = torch.ones_like(inp)
+         traindataset.append({"input_ids": inp, "attention_mask": attention_mask})
+
     torch.save(traindataset, cache_file)
     return traindataset
 

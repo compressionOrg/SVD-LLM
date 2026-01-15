@@ -2,14 +2,14 @@
 
 set -x
 
-while true; do
-  if [ -z "$(nvidia-smi -i 0 --query-compute-apps=pid --format=csv,noheader 2>/dev/null)" ]; then
-    echo "GPU 0 is free"
-    break
-  fi
-  echo "GPU 0 is busy, waiting 600s..."
-  sleep 600
-done
+# while true; do
+#   if [ -z "$(nvidia-smi -i 0 --query-compute-apps=pid --format=csv,noheader 2>/dev/null)" ]; then
+#     echo "GPU 0 is free"
+#     break
+#   fi
+#   echo "GPU 0 is busy, waiting 600s..."
+#   sleep 600
+# done
 
 export CUDA_VISIBLE_DEVICES=0
 
@@ -18,7 +18,7 @@ export CUDA_VISIBLE_DEVICES=0
 model="facebook/opt-6.7b"
 model_name=$(echo "$model" | tr '/-' '_')
 
-sparsity_ratios=(0.3 0.4 0.5 0.6 0.7)
+sparsity_ratios=(0.3)
 # sparsity_ratios=(0.2)
 whitening_nsamples=256
 seed=3
@@ -49,12 +49,12 @@ evaluate_whitening(){
 for sparsity_ratio in "${sparsity_ratios[@]}"
 do
     echo "Create  $model_name profile with ratio $sparsity_ratio"
-    # ratio=$(python3 -c "print(f'{1 - $sparsity_ratio:.1f}')")
+    ratio=$(python3 -c "print(f'{1 - $sparsity_ratio:.1f}')")
     echo "ratio:$sparsity_ratio"
     # create whitening 
     # create_whitening ${sparsity_ratio}
     # evaluate
-    evaluate_whitening 4 "${sparsity_ratio}"
+    evaluate_whitening 4 "${ratio}"
     # evaluate_whitening 5 "${ratio}"
 done
 
