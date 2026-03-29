@@ -1,14 +1,16 @@
 #!/bin/bash
+# conda activate svd_llm
 
 set -x
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 # model="meta-llama/Llama-2-13b-hf"
 # model="mistralai/Mistral-7B-v0.1"
-model="meta-llama/Llama-3.1-8B"
+# model="meta-llama/Llama-3.2-3B-Instruct"
+model="llm_weights/models--meta-llama--Llama-3.2-3B-Instruct/model"
 model_name=$(echo "$model" | tr '/-' '_')
 
 # sparsity_ratios=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8) # 
-sparsity_ratios=(0.3 0.4 0.5 0.6) #  0.7
+sparsity_ratios=(0.3) # 0.4 0.5 0.6 0.7
 whitening_nsamples=256
 seed=3
 
@@ -32,7 +34,8 @@ create_whitening(){
 evaluate_whitening(){
     python SVDLLM.py \
     --step $1 \
-    --model_path "profiles/${model_name}_whitening_only_${2}.pt" >logs/${model_name}_whitening_only_ratio_${2}eval_step${1}.log
+    --task 'humaneval, gsm8k' \
+    --model_path "profiles/${model_name}_whitening_only_${2}.pt" >logs/${model_name}_gmsk_only_ratio_${2}eval_step${1}.log
 }
 
 for sparsity_ratio in "${sparsity_ratios[@]}"
@@ -41,9 +44,9 @@ do
     ratio=$(python3 -c "print(f'{1 - $sparsity_ratio:.1f}')")
     echo "ratio:$ratio"
     # create whitening 
-    create_whitening ${sparsity_ratio}
+    # create_whitening ${sparsity_ratio}
     # evaluate
-    # evaluate_whitening 4 "${ratio}"
+    evaluate_whitening 4 "${ratio}"
     # evaluate_whitening 5 "${ratio}"
 done
 

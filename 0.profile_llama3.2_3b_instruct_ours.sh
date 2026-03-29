@@ -1,14 +1,23 @@
 #!/bin/bash
 
+while true; do
+  if [ -z "$(nvidia-smi -i 3 --query-compute-apps=pid --format=csv,noheader 2>/dev/null)" ]; then
+    echo "GPU 3 is free"
+    break
+  fi
+  echo "GPU 3 is busy, waiting 600s..."
+  sleep 600
+done
+
 set -x
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=3
 # model="meta-llama/Llama-2-13b-hf"
 # model="mistralai/Mistral-7B-v0.1"
-model="meta-llama/Llama-3.1-8B"
+model="meta-llama/Llama-3.2-3B"
 model_name=$(echo "$model" | tr '/-' '_')
 
 # sparsity_ratios=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8) # 
-sparsity_ratios=(0.3 0.4 0.5 0.6) #  0.7
+sparsity_ratios=(0.3) # 0.4 0.5 0.6 0.7
 whitening_nsamples=256
 seed=3
 
@@ -17,7 +26,7 @@ seed=3
 ## you can also run the following command for low-resource gpu (ex. llama 7b will only need 15G gpu memory to compress) or to compress large-scale llm (ex. llama 65b)
 # python SVDLLM.py --model jeffwan/llama-7b-hf --step 1 --ratio 0.2 --whitening_nsamples 256 --dataset wikitext2 --model_seq_len 2048 --save_path ./ --run_low_resource
 create_whitening(){
-    python SVDLLM.py \
+    python SVDLLM_V4.py \
     --model ${model} \
     --step 1 \
     --ratio $1 \
@@ -25,14 +34,14 @@ create_whitening(){
     --dataset wikitext2 \
     --seed ${seed} \
     --model_seq_len 2048 \
-    --save_path "profiles" >logs/${model_name}_whitening_only_ratio_${1}.log
+    --save_path "profiles_ours" >logs_ours/${model_name}_whitening_only_ratio_${1}.log
 }
     # --profiling_mat_path "profiles/${model_name}_profiling_wikitext2_${whitening_nsamples}_${seed}.pt" \
 
 evaluate_whitening(){
-    python SVDLLM.py \
+    python SVDLLM_V4.py \
     --step $1 \
-    --model_path "profiles/${model_name}_whitening_only_${2}.pt" >logs/${model_name}_whitening_only_ratio_${2}eval_step${1}.log
+    --model_path "profiles_ours/${model_name}_whitening_only_${2}.pt" >logs_ours/${model_name}_whitening_only_ratio_${2}eval_step${1}.log
 }
 
 for sparsity_ratio in "${sparsity_ratios[@]}"
@@ -43,7 +52,7 @@ do
     # create whitening 
     create_whitening ${sparsity_ratio}
     # evaluate
-    # evaluate_whitening 4 "${ratio}"
+    evaluate_whitening 4 "${ratio}"
     # evaluate_whitening 5 "${ratio}"
 done
 

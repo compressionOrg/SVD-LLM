@@ -2,16 +2,17 @@
 
 set -x
 export CUDA_VISIBLE_DEVICES=0
-# model="meta-llama/Llama-2-13b-hf"
+model="meta-llama/Llama-2-7b-hf"
 # model="mistralai/Mistral-7B-v0.1"
-model="meta-llama/Llama-3.1-8B"
+# model="meta-llama/Llama-3.1-8B"
 model_name=$(echo "$model" | tr '/-' '_')
 
 # sparsity_ratios=(0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8) # 
-sparsity_ratios=(0.3 0.4 0.5 0.6) #  0.7
+sparsity_ratios=(0.3 0.4 0.5 0.6 0.7) # 
 whitening_nsamples=256
 seed=3
 
+mkdir -p logs_eff
 # run data whitening with 20% compression ratio
 # python SVDLLM.py --model Enoch/llama-7b-hf --step 1 --ratio 0.2 --whitening_nsamples 256 --dataset wikitext2 --seed 3 --model_seq_len 2048 --save_path .
 ## you can also run the following command for low-resource gpu (ex. llama 7b will only need 15G gpu memory to compress) or to compress large-scale llm (ex. llama 65b)
@@ -32,7 +33,7 @@ create_whitening(){
 evaluate_whitening(){
     python SVDLLM.py \
     --step $1 \
-    --model_path "profiles/${model_name}_whitening_only_${2}.pt" >logs/${model_name}_whitening_only_ratio_${2}eval_step${1}.log
+    --model_path "profiles/${model_name}_whitening_only_${2}.pt" >logs_eff/${model_name}_whitening_only_ratio_${2}eval_step${1}.log
 }
 
 for sparsity_ratio in "${sparsity_ratios[@]}"
@@ -41,10 +42,10 @@ do
     ratio=$(python3 -c "print(f'{1 - $sparsity_ratio:.1f}')")
     echo "ratio:$ratio"
     # create whitening 
-    create_whitening ${sparsity_ratio}
+    # create_whitening ${sparsity_ratio}
     # evaluate
     # evaluate_whitening 4 "${ratio}"
-    # evaluate_whitening 5 "${ratio}"
+    evaluate_whitening 5 "${ratio}"
 done
 
 set +x
